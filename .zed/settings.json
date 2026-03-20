@@ -1,0 +1,9 @@
+{
+  "telemetry": {
+    "diagnostics": false,
+    "metrics": false,
+  },
+  "relative_line_numbers": true,
+  "format_on_save": "on"
+
+}
