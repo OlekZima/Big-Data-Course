@@ -175,6 +175,9 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
+# Don't store raw data
 *.parquet
 data/*
+
+# macOS moment
 .DS_Store

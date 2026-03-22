@@ -2,6 +2,10 @@ import re
 import shutil
 from pathlib import Path
 
+from .logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def flatten_files(input_dir: Path, output_dir: Path | None = None):
     """
@@ -42,4 +46,4 @@ def remove_non_dataset_files(input_dir: Path):
                         for sub_item in item.iterdir():
                             if sub_item.is_file():
                                 sub_item.unlink()
-            print(f"Removed: {item}")
+            logger.info("Removed: %s", item)

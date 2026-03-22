@@ -6,39 +6,35 @@ Uses COPY command via pg.copy_expert for max speed.
 from pathlib import Path
 
 import pandas as pd
-import psycopg2
 from psycopg2 import sql
 from tqdm import tqdm
 
-from utils.db import get_connection
+from .sql_queries import create_bronze_table_sql
+from .utils.db import get_connection
+from .utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
-def create_bronze_table():
+def create_bronze_table(drop_if_exists: bool = True):
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS bronze CASCADE;")
-            cur.execute("""
-                CREATE TABLE bronze (
-                    transaction_id          TEXT,
-                    account_id             TEXT,
-                    transaction_timestamp  TIMESTAMPTZ,
-                    mcc_code               BIGINT,
-                    channel                TEXT,
-                    amount                 DOUBLE PRECISION,
-                    txn_type               TEXT,
-                    counterparty_id        TEXT,
-                    loaded_at              TIMESTAMPTZ DEFAULT NOW()
-                );
-            """)
-    print("[BRONZE] Table created")
+            if drop_if_exists:
+                cur.execute("DROP TABLE IF EXISTS bronze CASCADE;")
+            cur.execute(create_bronze_table_sql())
+    logger.info("[BRONZE] Table created")
 
 
-def load_parquet_to_postgres(parquet_dir: str = "data/raw"):
-    create_bronze_table()
+def load_parquet_to_postgres(
+    parquet_dir: str = "data/raw",
+    drop_if_exists: bool = True,
+    vacuum_after_load: bool = True,
+):
+    create_bronze_table(drop_if_exists=drop_if_exists)
 
     path = Path(parquet_dir)
     parquet_files = sorted(path.rglob("*.parquet"))
-    print(f"[BRONZE] Found {len(parquet_files)} Parquet files")
+    logger.info("[BRONZE] Found %d Parquet files", len(parquet_files))
 
     cols = [
         "transaction_id",
@@ -90,9 +86,14 @@ def load_parquet_to_postgres(parquet_dir: str = "data/raw"):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SET session_replication_role = 'origin';")
-            cur.execute("VACUUM ANALYZE bronze;")
 
-    print(f"[BRONZE] Loaded {total:,} rows")
+    # VACUUM must run outside transaction block
+    if vacuum_after_load:
+        with get_connection(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("VACUUM ANALYZE bronze;")
+
+    logger.info("[BRONZE] Loaded %s rows", f"{total:,}")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import kagglehub
 
-from utils.constants import DATASET_HANDLE
+from .constants import DATASET_HANDLE
 
 
 def get_dataset(output_dir: Path):
