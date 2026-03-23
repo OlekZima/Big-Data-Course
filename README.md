@@ -8,7 +8,7 @@ This project implements a medallion architecture (Bronze → Silver → Gold) EL
 - **DB Architecture (ERD + High Level)**: embedded below in Mermaid
 - **Reproducible SQL script**: `sql/elt_pipeline.sql`
 - **Code (versioned)**: `src/`
-- **Data Quality Risks**: documented in `docs/report.md` and `data/README.md`
+- **Data Quality Risks**: documented in `docs/report.md`
 
 ## Project Structure
 
@@ -21,7 +21,6 @@ BGD/
 │   ├── bronze.py
 │   ├── silver.py
 │   ├── gold.py
-│   ├── job.py
 │   ├── main.py
 │   └── sql_queries.py
 ├── docs/
@@ -168,17 +167,27 @@ uv run python -m src.main
 This will:
 
 - download/prepare dataset (if missing),
-- load Bronze,
-- clean Silver,
+- load Bronze (UNLOGGED — no WAL overhead),
+- clean Silver (UNLOGGED) by streaming each parquet file through Bronze staging (load → upsert → truncate),
 - build Gold tables.
+
+> **Storage note:** Bronze is a transient staging table used per batch during
+> Silver build. Each file is loaded into Bronze, upserted into Silver, then
+> Bronze is truncated. This keeps peak usage close to `silver + one batch`.
 
 ## Non-destructive run options
 
-If you already have data in PostgreSQL and want to avoid dropping/reloading `bronze`, run only downstream steps:
+`src/silver` recreates both `silver` and `bronze` (staging) as part of its own
+run. If you only want to rebuild Gold from an existing Silver table, run:
 
 ```
-uv run python -m src.silver
 uv run python -m src.gold
+```
+
+To rebuild Silver from raw parquet files:
+
+```
+uv run python -m src.silver   # streams parquet → bronze staging → silver
 ```
 
 You can also run specific layers independently:
@@ -193,12 +202,11 @@ uv run python -m src.gold
 
 All scripts below include a `if __name__ == "__main__":` entry point and can be executed directly:
 
-1. `src/bronze.py` — create and load the Bronze table
-2. `src/silver.py` — clean and create the Silver table
+1. `src/bronze.py` — create the Bronze staging schema (UNLOGGED, empty)
+2. `src/silver.py` — stream raw parquet through Bronze staging and upsert cleaned data into Silver
 3. `src/gold.py` — build Gold tables (aggregations + JOIN-based)
 4. `src/sql_queries.py` — list available SQL query names
-5. `src/job.py` — Spark job (writes Silver/Gold parquet)
-6. `src/main.py` — end-to-end orchestration
+5. `src/main.py` — end-to-end orchestration
 
 ## SQL-Only Reproducible Pipeline
 
@@ -214,12 +222,16 @@ psql -h localhost -U user -d bigdata -f sql/elt_pipeline.sql
 2. Null/empty keys
 3. Timestamp formatting inconsistencies
 
-Full details: `docs/report.md` and `data/README.md`.
+Full details: `docs/report.md`.
 
-## Operational note: VACUUM behavior
+## Operational note: storage-efficient design
 
-`VACUUM ANALYZE` is executed outside transaction blocks (autocommit mode) to avoid PostgreSQL errors like:
+Both Bronze and Silver are created as **`UNLOGGED TABLE`** in PostgreSQL.
+This means:
 
-- `VACUUM cannot run inside a transaction block`
-
-This is handled in the Bronze loading implementation.
+- No WAL (write-ahead log) is written during inserts → roughly **2× less disk
+  I/O** during the load phase.
+- `VACUUM` is a no-op on UNLOGGED tables; `ANALYZE` is run on Silver after the
+  streaming upsert phase so the query planner has accurate statistics.
+- Bronze is used as an ephemeral per-batch staging table and truncated between
+  batches; it is retained empty at the end to keep the raw-layer schema visible.
