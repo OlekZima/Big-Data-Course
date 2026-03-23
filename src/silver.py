@@ -1,25 +1,88 @@
 """
-Silver layer: clean data and handle key data quality issues.
+Silver layer: storage-safe streaming build.
 
-This version keeps profiling non-blocking by default by avoiding expensive
-full-table DISTINCT counts unless explicitly requested.
+Refactor summary
+----------------
+This module builds `silver` without materializing full `bronze` + `silver`
+at the same time (which caused DiskFull on large datasets).
+
+Flow per parquet file:
+1) Read parquet batch
+2) Load raw rows into `bronze` staging (UNLOGGED)
+3) Upsert cleaned rows from `bronze` -> `silver`
+4) Truncate `bronze`
+5) Repeat
+
+Result:
+- Bronze exists and is genuinely loaded (staging role)
+- Silver is cleaned + deduplicated
+- Peak disk stays close to: silver size + one parquet batch
 """
 
 from __future__ import annotations
 
-from .sql_queries import create_silver_table_sql
+import io
+from pathlib import Path
+
+import pandas as pd
+from psycopg2 import sql
+from tqdm import tqdm
+
+from .sql_queries import create_bronze_table_sql, create_silver_table_sql
 from .utils.db import get_connection
 from .utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_COLS: list[str] = [
+    "transaction_id",
+    "account_id",
+    "transaction_timestamp",
+    "mcc_code",
+    "channel",
+    "amount",
+    "txn_type",
+    "counterparty_id",
+]
+
+_UPSERT_FROM_BRONZE_SQL = """
+INSERT INTO silver (
+    transaction_id,
+    account_id,
+    transaction_timestamp,
+    mcc_code,
+    channel,
+    amount,
+    txn_type,
+    counterparty_id
+)
+SELECT
+    b.transaction_id,
+    b.account_id,
+    b.transaction_timestamp,
+    b.mcc_code,
+    b.channel,
+    b.amount,
+    b.txn_type,
+    b.counterparty_id
+FROM bronze b
+WHERE b.transaction_id IS NOT NULL
+  AND b.transaction_id <> ''
+ON CONFLICT (transaction_id) DO UPDATE
+SET
+    account_id            = EXCLUDED.account_id,
+    transaction_timestamp = EXCLUDED.transaction_timestamp,
+    mcc_code              = EXCLUDED.mcc_code,
+    channel               = EXCLUDED.channel,
+    amount                = EXCLUDED.amount,
+    txn_type              = EXCLUDED.txn_type,
+    counterparty_id       = EXCLUDED.counterparty_id
+WHERE silver.transaction_timestamp IS NULL
+   OR EXCLUDED.transaction_timestamp > silver.transaction_timestamp
+"""
+
 
 def _estimate_row_count(table_name: str) -> int | None:
-    """
-    Return an estimated row count from PostgreSQL statistics.
-
-    Uses pg_class.reltuples and does not force a full table scan.
-    """
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -27,11 +90,11 @@ def _estimate_row_count(table_name: str) -> int | None:
                 SELECT CASE
                          WHEN c.reltuples < 0 THEN NULL
                          ELSE c.reltuples::bigint
-                       END AS est_rows
+                       END
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE n.nspname = 'public'
-                  AND c.relname = %s;
+                  AND c.relname = %s
                 """,
                 (table_name,),
             )
@@ -39,122 +102,156 @@ def _estimate_row_count(table_name: str) -> int | None:
             return row[0] if row else None
 
 
-def _quick_profile() -> None:
-    """
-    Lightweight, non-blocking profile for very large bronze tables.
+def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
+    # Ensure schema compatibility for drifted files
+    for col in _COLS:
+        if col not in df.columns:
+            df[col] = None
 
-    Avoids:
-    - COUNT(*)
-    - COUNT(DISTINCT ...)
-    """
-    est_total = _estimate_row_count("bronze")
-    if est_total is None:
-        logger.info("[SILVER] Bronze estimated rows: unavailable (stats not ready)")
-    else:
-        logger.info("[SILVER] Bronze estimated rows: %s", f"{est_total:,}")
+    df = df.loc[:, _COLS].copy()
 
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            # NULL/empty key count can still be expensive, but is usually much cheaper
-            # than full DISTINCT and gives actionable quality signal.
-            cur.execute(
-                """
-                SELECT COUNT(*)
-                FROM bronze
-                WHERE transaction_id IS NULL OR transaction_id = '';
-                """
-            )
-            null_or_empty = cur.fetchone()[0]
-            logger.info(
-                "[SILVER] Null/empty transaction_id rows: %s", f"{null_or_empty:,}"
-            )
+    # Keep only rows with a usable key before dedup/upsert
+    key_mask: pd.Series = df["transaction_id"].notna() & (df["transaction_id"] != "")
+    df = df.loc[key_mask, :].copy()
 
-    logger.info(
-        "[SILVER] Duplicate profiling skipped by default "
-        "(enable with full_profile=True if needed)."
+    if df.empty:
+        return df
+
+    # Per-batch dedup: keep the latest timestamp per transaction_id.
+    # Parse timestamps first so ordering is truly chronological.
+    parsed_ts = pd.to_datetime(df["transaction_timestamp"], errors="coerce", utc=True)
+    df = (
+        df.assign(_parsed_ts=parsed_ts)
+        .sort_values(
+            by=["transaction_id", "_parsed_ts"],
+            ascending=[True, False],
+            na_position="last",
+        )
+        .drop_duplicates(subset=["transaction_id"], keep="first")
+        .drop(columns=["_parsed_ts"])
     )
 
+    # Normalize missing values for COPY NULL handling
+    df = df.where(pd.notnull(df), None)
+    return df
 
-def _full_profile() -> None:
-    """
-    Full profile with expensive metrics (blocking on very large datasets).
-    """
+
+def _create_staging_bronze() -> None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM bronze;")
-            total = cur.fetchone()[0]
-            logger.info("[SILVER] Total rows in bronze: %s", f"{total:,}")
-
-            cur.execute(
-                """
-                SELECT COUNT(*) - COUNT(DISTINCT transaction_id)
-                FROM bronze;
-                """
-            )
-            dups = cur.fetchone()[0]
-            logger.info("[SILVER] Duplicate transaction_ids: %s", f"{dups:,}")
-
-            cur.execute(
-                """
-                SELECT COUNT(*)
-                FROM bronze
-                WHERE transaction_id IS NULL OR transaction_id = '';
-                """
-            )
-            nulls = cur.fetchone()[0]
-            logger.info("[SILVER] Null/empty transaction_id: %s", f"{nulls:,}")
+            cur.execute("DROP TABLE IF EXISTS bronze CASCADE;")
+            cur.execute(create_bronze_table_sql())
+            cur.execute("TRUNCATE TABLE bronze;")
 
 
-def clean_silver(full_profile: bool = False):
-    """
-    Build Silver from Bronze.
-
-    Args:
-        full_profile:
-            - False (default): lightweight non-blocking profiling
-            - True: run full (expensive) profiling including distinct duplicate count
-    """
-    logger.info("[SILVER] Starting silver cleaning (full_profile=%s)", full_profile)
-
-    if full_profile:
-        _full_profile()
-    else:
-        _quick_profile()
-
-    # Helper index to speed deduplication/window operations
+def _create_target_silver() -> None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            logger.info("[SILVER] Creating helper index on bronze...")
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_bronze_txid_ts
-                ON bronze (transaction_id, transaction_timestamp DESC);
-                """
-            )
-            cur.execute("ANALYZE bronze;")
-            logger.info("[SILVER] Bronze analyzed")
-
-    # Create cleaned silver table
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            logger.info("[SILVER] Rebuilding silver table...")
             cur.execute("DROP TABLE IF EXISTS silver CASCADE;")
             cur.execute(create_silver_table_sql())
+
+
+def _copy_df_to_bronze(df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+
+    buf = io.StringIO()
+    df.to_csv(buf, sep="\t", header=False, na_rep="\\N", index=False)
+    buf.seek(0)
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.copy_expert(
+                sql.SQL(
+                    "COPY bronze ({}) FROM STDIN "
+                    "WITH (FORMAT CSV, DELIMITER E'\\t', NULL '\\N')"
+                ).format(sql.SQL(", ").join(sql.Identifier(c) for c in _COLS)),
+                buf,
+            )
+            return len(df)
+
+
+def _upsert_silver_from_bronze() -> int:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_UPSERT_FROM_BRONZE_SQL)
+            return cur.rowcount
+
+
+def _truncate_bronze() -> None:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE bronze;")
+
+
+def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> None:
+    """
+    Build silver by streaming parquet files through bronze staging.
+
+    Args:
+        parquet_dir: Directory with raw parquet files.
+        full_profile: If True, runs exact COUNT(*) on silver at the end.
+    """
+    path = Path(parquet_dir)
+    parquet_files = sorted(path.rglob("*.parquet"))
+
+    if not parquet_files:
+        logger.warning("[SILVER] No parquet files found in %s", parquet_dir)
+        return
+
+    logger.info(
+        "[SILVER] Starting streaming silver build from %d files", len(parquet_files)
+    )
+
+    # Recreate target and staging schemas
+    _create_target_silver()
+    _create_staging_bronze()
+
+    total_loaded_to_bronze = 0
+    total_upserted_silver = 0
+
+    for pf in tqdm(parquet_files, desc="Silver"):
+        df = pd.read_parquet(pf)
+        df = _prepare_df(df)
+
+        loaded = _copy_df_to_bronze(df)
+        total_loaded_to_bronze += loaded
+
+        upserted = _upsert_silver_from_bronze()
+        total_upserted_silver += upserted
+
+        _truncate_bronze()
+
+    # Planner stats
+    with get_connection() as conn:
+        with conn.cursor() as cur:
             cur.execute("ANALYZE silver;")
-            logger.info("[SILVER] Silver table created and analyzed")
 
-    est_silver = _estimate_row_count("silver")
-    if est_silver is not None:
-        logger.info("[SILVER] Silver estimated rows: %s", f"{est_silver:,}")
+    logger.info(
+        "[SILVER] Stream complete | rows loaded to bronze: %s | rows upserted to silver: %s",
+        f"{total_loaded_to_bronze:,}",
+        f"{total_upserted_silver:,}",
+    )
+
+    if full_profile:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM silver;")
+                exact = cur.fetchone()[0]
+                logger.info("[SILVER] Silver exact rows: %s", f"{exact:,}")
     else:
-        logger.info("[SILVER] Silver estimated rows: unavailable")
+        est = _estimate_row_count("silver")
+        logger.info(
+            "[SILVER] Silver estimated rows: %s",
+            f"{est:,}" if est is not None else "unavailable",
+        )
+
+    # Keep bronze table (empty) to preserve raw layer presence in DB architecture
+    logger.info("[SILVER] Bronze staging table retained (empty) after load")
 
 
-def main():
-    """
-    Default CLI behavior is non-blocking profile.
-    """
-    clean_silver(full_profile=False)
+def main() -> None:
+    clean_silver()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 -- name: create_bronze_table
-CREATE TABLE bronze (
+CREATE UNLOGGED TABLE bronze (
     transaction_id          TEXT,
     account_id              TEXT,
     transaction_timestamp   TIMESTAMPTZ,
@@ -12,36 +12,16 @@ CREATE TABLE bronze (
 );
 
 -- name: create_silver_table
-CREATE TABLE silver AS
-WITH ranked AS (
-    SELECT
-        transaction_id,
-        account_id,
-        transaction_timestamp,
-        mcc_code,
-        channel,
-        amount,
-        txn_type,
-        counterparty_id,
-        ROW_NUMBER() OVER (
-            PARTITION BY transaction_id
-            ORDER BY transaction_timestamp DESC NULLS LAST
-        ) AS rn
-    FROM bronze
-    WHERE transaction_id IS NOT NULL
-      AND transaction_id != ''
-)
-SELECT
-    transaction_id,
-    account_id,
-    transaction_timestamp,
-    mcc_code,
-    channel,
-    amount,
-    txn_type,
-    counterparty_id
-FROM ranked
-WHERE rn = 1;
+CREATE UNLOGGED TABLE silver (
+    transaction_id        TEXT PRIMARY KEY,
+    account_id            TEXT,
+    transaction_timestamp TIMESTAMPTZ,
+    mcc_code              BIGINT,
+    channel               TEXT,
+    amount                DOUBLE PRECISION,
+    txn_type              TEXT,
+    counterparty_id       TEXT
+);
 
 -- name: create_gold_daily
 CREATE TABLE gold_daily AS
