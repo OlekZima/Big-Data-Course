@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .bronze import load_parquet_to_postgres
+from .bronze import create_bronze_table
 from .gold import create_gold_tables
 from .silver import clean_silver
 from .utils.constants import DATA_PATH
@@ -24,15 +24,15 @@ def main():
         logger.info("[MAIN] Data already exists in %s, skipping download", DATA_PATH)
 
     logger.info("=== BRONZE ===")
-    load_parquet_to_postgres("data/raw")
+    create_bronze_table()
 
     logger.info("=== SILVER ===")
-    clean_silver()
+    clean_silver(str(DATA_PATH))
 
     logger.info("=== GOLD ===")
     create_gold_tables()
 
-    logger.info("[MAIN] Done! Tables: bronze, silver, gold_*")
+    logger.info("[MAIN] Done! Tables: bronze (staging, retained empty), silver, gold_*")
 
 
 if __name__ == "__main__":

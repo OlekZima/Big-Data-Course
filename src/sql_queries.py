@@ -71,9 +71,10 @@ def create_bronze_table_sql() -> str:
 
 def create_silver_table_sql() -> str:
     """
-    Create the cleaned `silver` table.
+    Create the `silver` table schema (UNLOGGED, with PK on `transaction_id`).
 
-    Removes duplicate `transaction_id` values and null/empty keys.
+    Data cleaning and deduplication are applied during streaming upsert from
+    bronze staging in the Silver pipeline implementation.
     """
     return get_query("create_silver_table")
 
