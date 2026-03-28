@@ -1,14 +1,4 @@
-# BGD — Medallion ELT Pipeline (PostgreSQL)
-
-This project implements a medallion architecture (Bronze → Silver → Gold) ELT pipeline on a transactional dataset. It includes reproducible SQL, Python loaders, and documentation with architecture diagrams.
-
-## Deliverables
-
-- **Problem Statement**: `docs/report.md`
-- **DB Architecture (ERD + High Level)**: embedded below in Mermaid
-- **Reproducible SQL script**: `sql/elt_pipeline.sql`
-- **Code (versioned)**: `src/`
-- **Data Quality Risks**: documented in `docs/report.md`
+# BGD — Medallion ELT
 
 ## Project Structure
 
