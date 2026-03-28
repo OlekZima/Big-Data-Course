@@ -181,3 +181,6 @@ data/*
 
 # macOS moment
 .DS_Store
+
+# zed stuff
+.zed
