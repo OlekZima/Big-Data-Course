@@ -1,17 +1,15 @@
 """
 Silver layer: storage-safe streaming build.
 
-Refactor summary
-----------------
 This module builds `silver` without materializing full `bronze` + `silver`
-at the same time (which caused DiskFull on large datasets).
+at the same time (which caused DiskFull).
 
 Flow per parquet file:
-1) Read parquet batch
-2) Load raw rows into `bronze` staging (UNLOGGED)
-3) Upsert cleaned rows from `bronze` -> `silver`
-4) Truncate `bronze`
-5) Repeat
+1. Read parquet batch
+2. Load raw rows into `bronze` staging (UNLOGGED)
+3. Upsert cleaned rows from `bronze` -> `silver`
+4. Truncate `bronze`
+5. Repeat
 
 Result:
 - Bronze exists and is genuinely loaded (staging role)
@@ -29,21 +27,19 @@ from psycopg2 import sql
 from tqdm import tqdm
 
 from .sql_queries import create_bronze_table_sql, create_silver_table_sql
+from .utils.constants import (
+    BRONZE_TABLE,
+    SILVER_TABLE,
+    TRANSACTION_COLUMNS,
+    TRANSACTION_KEY_COLUMN,
+    TRANSACTION_TIMESTAMP_COLUMN,
+)
 from .utils.db import get_connection
 from .utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_COLS: list[str] = [
-    "transaction_id",
-    "account_id",
-    "transaction_timestamp",
-    "mcc_code",
-    "channel",
-    "amount",
-    "txn_type",
-    "counterparty_id",
-]
+_COLS: list[str] = TRANSACTION_COLUMNS
 
 _UPSERT_FROM_BRONZE_SQL = """
 INSERT INTO silver (
@@ -65,10 +61,10 @@ SELECT
     b.amount,
     b.txn_type,
     b.counterparty_id
-FROM bronze b
-WHERE b.transaction_id IS NOT NULL
-  AND b.transaction_id <> ''
-ON CONFLICT (transaction_id) DO UPDATE
+FROM {BRONZE_TABLE} b
+WHERE b.{TRANSACTION_KEY_COLUMN} IS NOT NULL
+  AND b.{TRANSACTION_KEY_COLUMN} <> ''
+ON CONFLICT ({TRANSACTION_KEY_COLUMN}) DO UPDATE
 SET
     account_id            = EXCLUDED.account_id,
     transaction_timestamp = EXCLUDED.transaction_timestamp,
@@ -77,9 +73,14 @@ SET
     amount                = EXCLUDED.amount,
     txn_type              = EXCLUDED.txn_type,
     counterparty_id       = EXCLUDED.counterparty_id
-WHERE silver.transaction_timestamp IS NULL
-   OR EXCLUDED.transaction_timestamp > silver.transaction_timestamp
-"""
+WHERE {SILVER_TABLE}.{TRANSACTION_TIMESTAMP_COLUMN} IS NULL
+   OR EXCLUDED.{TRANSACTION_TIMESTAMP_COLUMN} > {SILVER_TABLE}.{TRANSACTION_TIMESTAMP_COLUMN}
+""".format(
+    BRONZE_TABLE=BRONZE_TABLE,
+    SILVER_TABLE=SILVER_TABLE,
+    TRANSACTION_KEY_COLUMN=TRANSACTION_KEY_COLUMN,
+    TRANSACTION_TIMESTAMP_COLUMN=TRANSACTION_TIMESTAMP_COLUMN,
+)
 
 
 def _estimate_row_count(table_name: str) -> int | None:
@@ -111,7 +112,9 @@ def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.loc[:, _COLS].copy()
 
     # Keep only rows with a usable key before dedup/upsert
-    key_mask: pd.Series = df["transaction_id"].notna() & (df["transaction_id"] != "")
+    key_mask: pd.Series = df[TRANSACTION_KEY_COLUMN].notna() & (
+        df[TRANSACTION_KEY_COLUMN] != ""
+    )
     df = df.loc[key_mask, :].copy()
 
     if df.empty:
@@ -119,15 +122,17 @@ def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
 
     # Per-batch dedup: keep the latest timestamp per transaction_id.
     # Parse timestamps first so ordering is truly chronological.
-    parsed_ts = pd.to_datetime(df["transaction_timestamp"], errors="coerce", utc=True)
+    parsed_ts = pd.to_datetime(
+        df[TRANSACTION_TIMESTAMP_COLUMN], errors="coerce", utc=True
+    )
     df = (
         df.assign(_parsed_ts=parsed_ts)
         .sort_values(
-            by=["transaction_id", "_parsed_ts"],
+            by=[TRANSACTION_KEY_COLUMN, "_parsed_ts"],
             ascending=[True, False],
             na_position="last",
         )
-        .drop_duplicates(subset=["transaction_id"], keep="first")
+        .drop_duplicates(subset=[TRANSACTION_KEY_COLUMN], keep="first")
         .drop(columns=["_parsed_ts"])
     )
 
@@ -139,15 +144,15 @@ def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
 def _create_staging_bronze() -> None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS bronze CASCADE;")
+            cur.execute(f"DROP TABLE IF EXISTS {BRONZE_TABLE} CASCADE;")
             cur.execute(create_bronze_table_sql())
-            cur.execute("TRUNCATE TABLE bronze;")
+            cur.execute(f"TRUNCATE TABLE {BRONZE_TABLE};")
 
 
 def _create_target_silver() -> None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS silver CASCADE;")
+            cur.execute(f"DROP TABLE IF EXISTS {SILVER_TABLE} CASCADE;")
             cur.execute(create_silver_table_sql())
 
 
@@ -163,7 +168,7 @@ def _copy_df_to_bronze(df: pd.DataFrame) -> int:
         with conn.cursor() as cur:
             cur.copy_expert(
                 sql.SQL(
-                    "COPY bronze ({}) FROM STDIN "
+                    f"COPY {BRONZE_TABLE} ({{}}) FROM STDIN "
                     "WITH (FORMAT CSV, DELIMITER E'\\t', NULL '\\N')"
                 ).format(sql.SQL(", ").join(sql.Identifier(c) for c in _COLS)),
                 buf,
@@ -181,7 +186,7 @@ def _upsert_silver_from_bronze() -> int:
 def _truncate_bronze() -> None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE bronze;")
+            cur.execute(f"TRUNCATE TABLE {BRONZE_TABLE};")
 
 
 def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> None:
@@ -225,7 +230,7 @@ def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> N
     # Planner stats
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("ANALYZE silver;")
+            cur.execute(f"ANALYZE {SILVER_TABLE};")
 
     logger.info(
         "[SILVER] Stream complete | rows loaded to bronze: %s | rows upserted to silver: %s",
@@ -236,11 +241,11 @@ def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> N
     if full_profile:
         with get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM silver;")
+                cur.execute(f"SELECT COUNT(*) FROM {SILVER_TABLE};")
                 exact = cur.fetchone()[0]
                 logger.info("[SILVER] Silver exact rows: %s", f"{exact:,}")
     else:
-        est = _estimate_row_count("silver")
+        est = _estimate_row_count(SILVER_TABLE)
         logger.info(
             "[SILVER] Silver estimated rows: %s",
             f"{est:,}" if est is not None else "unavailable",

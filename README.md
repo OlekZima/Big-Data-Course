@@ -142,7 +142,7 @@ flowchart LR
 
 - Docker + Docker Compose
 - Python 3.10+
-- `uv` (recommended) or standard venv + pip
+- `uv` package manager
 
 ## Setup
 
@@ -168,7 +168,7 @@ This will:
 
 - download/prepare dataset (if missing),
 - load Bronze (UNLOGGED — no WAL overhead),
-- clean Silver (UNLOGGED) by streaming each parquet file through Bronze staging (load → upsert → truncate),
+- clean Silver (UNLOGGED) by streaming each parquet file through Bronze staging (load -> upsert -> truncate),
 - build Gold tables.
 
 > **Storage note:** Bronze is a transient staging table used per batch during
@@ -177,8 +177,8 @@ This will:
 
 ## Non-destructive run options
 
-`src/silver` recreates both `silver` and `bronze` (staging) as part of its own
-run. If you only want to rebuild Gold from an existing Silver table, run:
+`src/silver` recreates both `silver` and `bronze` as part of its own run.
+If you only want to rebuild Gold from an existing Silver table, run:
 
 ```
 uv run python -m src.gold
@@ -187,7 +187,7 @@ uv run python -m src.gold
 To rebuild Silver from raw parquet files:
 
 ```
-uv run python -m src.silver   # streams parquet → bronze staging → silver
+uv run python -m src.silver
 ```
 
 You can also run specific layers independently:
@@ -208,30 +208,10 @@ All scripts below include a `if __name__ == "__main__":` entry point and can be 
 4. `src/sql_queries.py` — list available SQL query names
 5. `src/main.py` — end-to-end orchestration
 
-## SQL-Only Reproducible Pipeline
-
-If you want to re-run the pipeline purely via SQL (tables only):
-
-```
-psql -h localhost -U user -d bigdata -f sql/elt_pipeline.sql
-```
-
-## Data Quality Risks (summary)
+## Data Quality Risks
 
 1. Duplicate transactions (same `transaction_id`)
 2. Null/empty keys
 3. Timestamp formatting inconsistencies
 
-Full details: `docs/report.md`.
-
-## Operational note: storage-efficient design
-
-Both Bronze and Silver are created as **`UNLOGGED TABLE`** in PostgreSQL.
-This means:
-
-- No WAL (write-ahead log) is written during inserts → roughly **2× less disk
-  I/O** during the load phase.
-- `VACUUM` is a no-op on UNLOGGED tables; `ANALYZE` is run on Silver after the
-  streaming upsert phase so the query planner has accurate statistics.
-- Bronze is used as an ephemeral per-batch staging table and truncated between
-  batches; it is retained empty at the end to keep the raw-layer schema visible.
+Full details: [docs/report.md](docs/report.md).

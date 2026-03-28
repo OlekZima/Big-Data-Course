@@ -1,15 +1,7 @@
 """
 Centralized logging utility for the BGD project.
 
-This module provides a reusable logger configuration that writes logs to:
-1) stdout (console)
-2) a dedicated log file
-
-Usage:
-    from .logger import get_logger
-
-    logger = get_logger(__name__)
-    logger.info("Pipeline started")
+This module provides a reusable logger configuration
 """
 
 from __future__ import annotations
