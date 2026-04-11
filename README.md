@@ -1,34 +1,47 @@
-# BGD — Medallion ELT Pipeline (PostgreSQL)
+# BGD — Medallion ELT Pipeline
 
-This project implements a medallion architecture (Bronze → Silver → Gold) ELT pipeline on a transactional dataset. It includes reproducible SQL, Python loaders, and documentation with architecture diagrams.
+This project implements a medallion architecture (Bronze → Silver → Gold) ELT pipeline on a transactional dataset. It uses **PostgreSQL** as the data store, **DuckDB** as a scalable in-process processing engine, **Dagster** for orchestration, and **dbt** for gold-layer transformations.
 
 ## Deliverables
 
 - **Problem Statement**: `docs/report.md`
 - **DB Architecture (ERD + High Level)**: embedded below in Mermaid
 - **Reproducible SQL script**: `sql/elt_pipeline.sql`
-- **Code (versioned)**: `src/`
+- **Code (versioned)**: `src/`, `pipeline/`, `dbt/`, `scripts/`
 - **Data Quality Risks**: documented in `docs/report.md`
 
 ## Project Structure
 
 ```
 BGD/
+├── src/                        # Core ELT modules
+│   ├── main.py                 # End-to-end orchestration (Python)
+│   ├── bronze.py               # Bronze layer
+│   ├── silver.py               # Silver layer (pandas or DuckDB path)
+│   ├── gold.py                 # Gold layer (SQL)
+│   ├── config.py               # Pydantic Settings (reads .env)
+│   ├── sql_queries.py          # Named SQL loader
+│   └── utils/
+│       ├── db.py               # PostgreSQL connection manager
+│       ├── duckdb_client.py    # DuckDB connection manager
+│       └── constants.py        # Table names, column lists
+├── pipeline/                   # Dagster orchestration
+│   ├── definitions.py          # Dagster Definitions (assets, job, resources)
+│   ├── assets/                 # bronze_table, silver_table, gold_tables
+│   └── resources/              # PostgresResource, DuckDBResource
+├── dbt/                        # dbt gold-layer transformations
+│   ├── dbt_project.yml
+│   ├── profiles.yml            # connection from env vars
+│   └── models/marts/           # 6 gold models + schema tests
+├── scripts/
+│   └── processing_engine.py   # Standalone DuckDB engine (no PostgreSQL needed)
 ├── sql/
-│   ├── elt_queries.sql
+│   ├── elt_queries.sql         # All DDL + named queries
 │   └── elt_pipeline.sql
-├── src/
-│   ├── bronze.py
-│   ├── silver.py
-│   ├── gold.py
-│   ├── main.py
-│   └── sql_queries.py
 ├── docs/
-│   ├── report.md
-│   └── diagrams/
-│       ├── erd.drawio
-│       └── architecture.drawio
-└── docker-compose.yml
+│   └── report.md
+├── .env.example                # Environment variable template
+└── docker-compose.yml          # PostgreSQL 15
 ```
 
 ## Architecture Diagrams (Mermaid)
@@ -116,26 +129,68 @@ erDiagram
 ### High-Level Architecture
 
 ```mermaid
-flowchart LR
-    A[Kaggle Dataset / Parquet Files] --> B[Bronze Layer: raw table in PostgreSQL]
-    B --> C[Silver Layer: cleaned & deduplicated table]
-    C --> D[Gold Layer: curated marts and KPIs]
+flowchart TD
+    DS[("Kaggle Dataset\nParquet files\ndata/raw/")]
 
-    D --> D1[gold_daily]
-    D --> D2[gold_by_channel]
-    D --> D3[gold_by_type]
-    D --> D4[gold_top_counterparties]
-    D --> D5[gold_by_mcc]
-    D --> D6[gold_channel_share JOIN]
-
-    subgraph Orchestration
-        E[src/main.py]
-        F[src/bronze.py]
-        G[src/silver.py]
-        H[src/gold.py]
+    subgraph ENGINE["DuckDB Processing Engine (scripts/processing_engine.py)"]
+        direction LR
+        DE_B[Bronze view\nread_parquet glob]
+        DE_S[Silver\ndedup ROW_NUMBER]
+        DE_G[Gold tables\n6 aggregations]
+        DE_B --> DE_S --> DE_G
     end
 
-    E --> F --> G --> H
+    subgraph DAGSTER["Dagster Orchestrator (pipeline/)"]
+        direction LR
+        DA_B[bronze_table\nasset]
+        DA_S[silver_table\nasset]
+        DA_G[gold_tables\nasset]
+        DA_B --> DA_S --> DA_G
+    end
+
+    subgraph PG["PostgreSQL (Docker)"]
+        direction TB
+        PG_B[(bronze\nUNLOGGED staging)]
+        PG_S[(silver\nUNLOGGED deduped)]
+        PG_G1[(gold_daily)]
+        PG_G2[(gold_by_channel)]
+        PG_G3[(gold_by_type)]
+        PG_G4[(gold_top_counterparties)]
+        PG_G5[(gold_by_mcc)]
+        PG_G6[(gold_channel_share)]
+    end
+
+    subgraph DBT["dbt (dbt/)"]
+        DBT_M[6 gold models\nschema tests]
+    end
+
+    DS -->|pandas or DuckDB| DA_S
+    DS --> ENGINE
+
+    DA_B -->|CREATE UNLOGGED TABLE| PG_B
+    DA_S -->|COPY + ON CONFLICT upsert| PG_S
+    DA_G -->|USE_DBT=false: CREATE TABLE AS| PG_G1 & PG_G2 & PG_G3 & PG_G4 & PG_G5 & PG_G6
+    DA_G -->|USE_DBT=true: dbt run| DBT_M
+    DBT_M -->|CREATE TABLE| PG_G1 & PG_G2 & PG_G3 & PG_G4 & PG_G5 & PG_G6
+```
+
+### Data Flow (Silver Streaming)
+
+```mermaid
+sequenceDiagram
+    participant P as Parquet file
+    participant D as DuckDB (optional)
+    participant B as Bronze (PG staging)
+    participant S as Silver (PG)
+
+    loop per file (398 files)
+        P->>D: read_parquet + dedup (USE_DUCKDB=true)
+        P-->>B: pandas read + COPY (USE_DUCKDB=false)
+        D-->>B: COPY cleaned batch
+        B->>S: ON CONFLICT DO UPDATE (latest timestamp wins)
+        B->>B: TRUNCATE
+    end
+    Note over B,S: Peak disk ≈ silver + one batch
 ```
 
 ## Requirements
