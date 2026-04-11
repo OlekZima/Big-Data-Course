@@ -187,3 +187,6 @@ data/*
 
 # zed
 .zed
+
+# dbt
+dbt/.user.yml
