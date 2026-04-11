@@ -123,6 +123,9 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+CLAUDE.md
+.claude/
+
 # Environments
 .env
 .venv
@@ -181,3 +184,9 @@ data/*
 
 # macOS moment
 .DS_Store
+
+# zed
+.zed
+
+# dbt
+dbt/.user.yml

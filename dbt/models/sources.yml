@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: public
+    schema: public
+    tables:
+      - name: silver
+        description: "Cleaned, deduplicated transaction data (silver layer)."
+        columns:
+          - name: transaction_id
+            description: "Primary key."
+            tests:
+              - unique
+              - not_null
+          - name: account_id
+            tests:
+              - not_null
+          - name: amount
+            tests:
+              - not_null

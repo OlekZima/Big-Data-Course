@@ -1,0 +1,53 @@
+version: 2
+
+models:
+  - name: gold_daily
+    description: "Daily transaction aggregations."
+    columns:
+      - name: day
+        tests:
+          - unique
+          - not_null
+      - name: txn_count
+        tests:
+          - not_null
+
+  - name: gold_by_channel
+    description: "Aggregations by payment channel."
+    columns:
+      - name: channel
+        tests:
+          - unique
+          - not_null
+
+  - name: gold_by_type
+    description: "Aggregations by transaction type."
+    columns:
+      - name: txn_type
+        tests:
+          - unique
+          - not_null
+
+  - name: gold_top_counterparties
+    description: "Top 20 counterparties by transaction volume."
+    columns:
+      - name: counterparty_id
+        tests:
+          - unique
+          - not_null
+
+  - name: gold_by_mcc
+    description: "Top 20 MCC codes by transaction amount."
+    columns:
+      - name: mcc_code
+        tests:
+          - unique
+          - not_null
+
+  - name: gold_channel_share
+    description: "Channel share of total transaction count and amount."
+    columns:
+      - name: channel
+        tests:
+          - unique
+          - not_null
