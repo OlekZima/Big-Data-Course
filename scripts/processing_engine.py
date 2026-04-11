@@ -63,7 +63,12 @@ def stage_bronze(conn: duckdb.DuckDBPyConnection, glob: str) -> str:
         FROM read_parquet('{glob}', union_by_name = true, hive_partitioning = false)
     """)
     row = conn.execute("SELECT COUNT(*) FROM bronze").fetchone()
-    logger.info("[BRONZE] Raw rows: %s", f"{row[0]:,}")
+    if row is None:
+        logger.error("[BRONZE] No count returned")
+        count = 0
+    else:
+        count = row[0]
+    logger.info("[BRONZE] Raw rows: %s", f"{count:,}")
     return "bronze"
 
 
@@ -104,7 +109,12 @@ def build_silver(conn: duckdb.DuckDBPyConnection) -> str:
     """)
 
     row = conn.execute("SELECT COUNT(*) FROM silver").fetchone()
-    logger.info("[SILVER] Deduplicated rows: %s", f"{row[0]:,}")
+    if row is None:
+        logger.error("[SILVER] No count returned")
+        count = 0
+    else:
+        count = row[0]
+    logger.info("[SILVER] Deduplicated rows: %s", f"{count:,}")
     return "silver"
 
 
@@ -188,15 +198,30 @@ def build_gold(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     for name, sql in gold_queries.items():
         conn.execute(sql)
         row = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()
-        counts[name] = row[0]
-        logger.info("[GOLD] %s: %s rows", name, f"{row[0]:,}")
+        if row is None:
+            logger.error("[GOLD] %s: No count returned", name)
+            count = 0
+        else:
+            count = row[0]
+        counts[name] = count
+        logger.info("[GOLD] %s: %s rows", name, f"{count:,}")
 
     return counts
 
 
 def print_sample(conn: duckdb.DuckDBPyConnection, table: str, limit: int = 5) -> None:
     logger.info("[SAMPLE] %s (top %d):", table, limit)
-    conn.execute(f"SELECT * FROM {table} LIMIT {limit}").show()
+    result = conn.execute(f"SELECT * FROM {table} LIMIT {limit}")
+    rows = result.fetchall()
+    if not rows:
+        logger.info("  (no rows)")
+        return
+    # Column names
+    description = result.description
+    col_names = [col[0] for col in description] if description else []
+    logger.info("  %s", " | ".join(col_names))
+    for row in rows:
+        logger.info("  %s", " | ".join(str(v) for v in row))
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +260,12 @@ def run(data_path: Path, duckdb_path: str, show_samples: bool) -> None:
         logger.info("PIPELINE SUMMARY")
         logger.info("  Engine : DuckDB (in-process, columnar)")
         logger.info("  Source : %d parquet file(s) from %s", len(parquet_files), data_path)
-        silver_count = conn.execute("SELECT COUNT(*) FROM silver").fetchone()[0]
+        row = conn.execute("SELECT COUNT(*) FROM silver").fetchone()
+        if row is None:
+            logger.error("[SUMMARY] No silver count returned")
+            silver_count = 0
+        else:
+            silver_count = row[0]
         logger.info("  Silver : %s deduplicated transactions", f"{silver_count:,}")
         for table, count in gold_counts.items():
             logger.info("  %-30s %s rows", table + ":", f"{count:,}")
