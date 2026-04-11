@@ -9,4 +9,18 @@ dependencies = [
     "pandas",
     "psycopg2-binary>=2.9.11",
     "pyarrow>=23.0.1",
+    "dagster>=1.6.0",
+    "dagster-duckdb>=0.21.0",
+    "dagster-postgres>=0.21.0",
+    "duckdb>=1.1.0",
+    "dbt-core>=1.7.0",
+    "dbt-postgres>=1.7.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "tqdm>=4.0.0",
 ]
+
+[tool.dagster]
+module_name = "pipeline"
+working_directory = "."

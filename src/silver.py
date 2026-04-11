@@ -26,6 +26,7 @@ import pandas as pd
 from psycopg2 import sql
 from tqdm import tqdm
 
+from .config import settings
 from .sql_queries import create_bronze_table_sql, create_silver_table_sql
 from .utils.constants import (
     BRONZE_TABLE,
@@ -35,6 +36,7 @@ from .utils.constants import (
     TRANSACTION_TIMESTAMP_COLUMN,
 )
 from .utils.db import get_connection
+from .utils.duckdb_client import get_duckdb_connection
 from .utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -101,6 +103,47 @@ def _estimate_row_count(table_name: str) -> int | None:
             )
             row = cur.fetchone()
             return row[0] if row else None
+
+
+def _prepare_df_duckdb(parquet_path: Path) -> pd.DataFrame:
+    """Read and clean a parquet file using DuckDB as processing engine."""
+    with get_duckdb_connection() as conn:
+        # Read parquet, select only known columns (fill missing with NULL)
+        raw = conn.execute(
+            f"SELECT * FROM read_parquet('{parquet_path}')"
+        ).description
+        available = {d[0] for d in raw}
+
+        select_parts = [
+            f'"{c}"' if c in available else f"NULL AS \"{c}\""
+            for c in _COLS
+        ]
+        select_expr = ", ".join(select_parts)
+
+        df: pd.DataFrame = conn.execute(
+            f"""
+            WITH raw AS (
+                SELECT {select_expr}
+                FROM read_parquet('{parquet_path}')
+                WHERE "{TRANSACTION_KEY_COLUMN}" IS NOT NULL
+                  AND CAST("{TRANSACTION_KEY_COLUMN}" AS VARCHAR) <> ''
+            ),
+            deduped AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY "{TRANSACTION_KEY_COLUMN}"
+                        ORDER BY TRY_CAST("{TRANSACTION_TIMESTAMP_COLUMN}" AS TIMESTAMPTZ) DESC NULLS LAST
+                    ) AS _rn
+                FROM raw
+            )
+            SELECT {", ".join(f'"{c}"' for c in _COLS)}
+            FROM deduped
+            WHERE _rn = 1
+            """
+        ).df()
+
+    df = df.where(pd.notnull(df), None)
+    return df
 
 
 def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -215,9 +258,18 @@ def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> N
     total_loaded_to_bronze = 0
     total_upserted_silver = 0
 
+    use_duckdb = settings.use_duckdb
+    if use_duckdb:
+        logger.info("[SILVER] DuckDB processing engine enabled")
+    else:
+        logger.info("[SILVER] pandas processing engine (set USE_DUCKDB=true to switch)")
+
     for pf in tqdm(parquet_files, desc="Silver"):
-        df = pd.read_parquet(pf)
-        df = _prepare_df(df)
+        if use_duckdb:
+            df = _prepare_df_duckdb(pf)
+        else:
+            df = pd.read_parquet(pf)
+            df = _prepare_df(df)
 
         loaded = _copy_df_to_bronze(df)
         total_loaded_to_bronze += loaded
