@@ -2,13 +2,9 @@ from contextlib import contextmanager
 
 import psycopg2
 
-DATABASE_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "dbname": "bigdata",
-    "user": "user",
-    "password": "pass",
-}
+from src.config import settings
+
+DATABASE_CONFIG = settings.postgres_dict
 
 
 @contextmanager
