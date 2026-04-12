@@ -1,8 +1,8 @@
 """
-DuckDB Processing Engine — single entry point demonstrating scalable parquet processing.
+DuckDB Processing Engine
 
 Reads raw parquet files from data/raw/, applies medallion-style transformations
-(dedup, cleaning, aggregation) entirely in-memory using DuckDB, then reports stats.
+(dedup, cleaning, aggregation) in-memory using DuckDB, then reports stats.
 
 Can be run standalone (no PostgreSQL required):
     python scripts/processing_engine.py
@@ -18,9 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Bootstrap: ensure project root on sys.path so `src.*` imports resolve
-# ---------------------------------------------------------------------------
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -37,9 +35,7 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Column helpers
-# ---------------------------------------------------------------------------
+
 _COLS = TRANSACTION_COLUMNS
 _KEY = TRANSACTION_KEY_COLUMN
 _TS = TRANSACTION_TIMESTAMP_COLUMN
@@ -47,9 +43,6 @@ _TS = TRANSACTION_TIMESTAMP_COLUMN
 _SELECT_COLS = ", ".join(f'"{c}"' for c in _COLS)
 
 
-# ---------------------------------------------------------------------------
-# Core processing steps
-# ---------------------------------------------------------------------------
 
 def _glob_pattern(data_path: Path) -> str:
     return str(data_path / "**" / "*.parquet")
@@ -216,17 +209,12 @@ def print_sample(conn: duckdb.DuckDBPyConnection, table: str, limit: int = 5) ->
     if not rows:
         logger.info("  (no rows)")
         return
-    # Column names
     description = result.description
     col_names = [col[0] for col in description] if description else []
     logger.info("  %s", " | ".join(col_names))
     for row in rows:
         logger.info("  %s", " | ".join(str(v) for v in row))
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 def run(data_path: Path, duckdb_path: str, show_samples: bool) -> None:
     glob = _glob_pattern(data_path)
@@ -243,19 +231,15 @@ def run(data_path: Path, duckdb_path: str, show_samples: bool) -> None:
 
     conn = duckdb.connect(duckdb_path)
     try:
-        # Bronze
         stage_bronze(conn, glob)
 
-        # Silver
         build_silver(conn)
 
-        # Gold
         gold_counts = build_gold(conn)
 
         elapsed = time.perf_counter() - t0
         logger.info("[ENGINE] Done in %.2fs", elapsed)
 
-        # Summary
         logger.info("=" * 60)
         logger.info("PIPELINE SUMMARY")
         logger.info("  Engine : DuckDB (in-process, columnar)")

@@ -10,11 +10,9 @@ import logging
 import sys
 from pathlib import Path
 
-# Default log storage
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "bgd.log"
 
-# Reusable formatter
 LOG_FORMAT = (
     "%(asctime)s | %(levelname)-8s | %(name)s | %(filename)s:%(lineno)d | %(message)s"
 )
@@ -75,7 +73,6 @@ def configure_logging(
     logger.setLevel(resolved_level)
     logger.propagate = False
 
-    # Avoid adding duplicate handlers on repeated imports/calls
     if logger.handlers:
         for handler in logger.handlers:
             handler.setLevel(resolved_level)

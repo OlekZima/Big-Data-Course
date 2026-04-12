@@ -1,14 +1,11 @@
 from pathlib import Path
 
-# Dataset configuration
 DATASET_HANDLE = "abhyudayrbih/rbih-nfpc-phase-2"
 DATA_PATH = Path("data/raw")
 
-# Core medallion table names
 BRONZE_TABLE = "bronze"
 SILVER_TABLE = "silver"
 
-# Gold layer table names
 GOLD_DAILY_TABLE = "gold_daily"
 GOLD_BY_CHANNEL_TABLE = "gold_by_channel"
 GOLD_BY_TYPE_TABLE = "gold_by_type"
@@ -25,7 +22,6 @@ GOLD_TABLES = [
     GOLD_CHANNEL_SHARE_TABLE,
 ]
 
-# Shared transaction schema columns (raw/core)
 TRANSACTION_COLUMNS = [
     "transaction_id",
     "account_id",
@@ -37,6 +33,5 @@ TRANSACTION_COLUMNS = [
     "counterparty_id",
 ]
 
-# Useful subsets
 TRANSACTION_KEY_COLUMN = "transaction_id"
 TRANSACTION_TIMESTAMP_COLUMN = "transaction_timestamp"
