@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic import Field
@@ -25,6 +26,9 @@ class Settings(BaseSettings):
 
     use_duckdb: bool = Field(default=False, alias="USE_DUCKDB")
     use_dbt: bool = Field(default=False, alias="USE_DBT")
+    # Parallel processing settings
+    max_workers: int = Field(default=os.cpu_count() or 1, alias="MAX_WORKERS")
+    duckdb_threads: int = Field(default=os.cpu_count() or 1, alias="DUCKDB_THREADS")
 
     @property
     def postgres_dsn(self) -> str:
