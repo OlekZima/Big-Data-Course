@@ -230,6 +230,7 @@ def run(data_path: Path, duckdb_path: str, show_samples: bool) -> None:
     t0 = time.perf_counter()
 
     conn = duckdb.connect(duckdb_path)
+    conn.execute(f"SET threads = {settings.duckdb_threads};")
     try:
         stage_bronze(conn, glob)
 
