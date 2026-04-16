@@ -108,7 +108,6 @@ def _estimate_row_count(table_name: str) -> int | None:
 def _prepare_df_duckdb(parquet_path: Path) -> pd.DataFrame:
     """Read and clean a parquet file using DuckDB as processing engine."""
     with get_duckdb_connection() as conn:
-        # Read parquet, select only known columns (fill missing with NULL)
         raw = conn.execute(
             f"SELECT * FROM read_parquet('{parquet_path}')"
         ).description
@@ -147,14 +146,12 @@ def _prepare_df_duckdb(parquet_path: Path) -> pd.DataFrame:
 
 
 def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
-    # Ensure schema compatibility for drifted files
     for col in _COLS:
         if col not in df.columns:
             df[col] = None
 
     df = df.loc[:, _COLS].copy()
 
-    # Keep only rows with a usable key before dedup/upsert
     key_mask: pd.Series = df[TRANSACTION_KEY_COLUMN].notna() & (
         df[TRANSACTION_KEY_COLUMN] != ""
     )
@@ -163,8 +160,6 @@ def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Per-batch dedup: keep the latest timestamp per transaction_id.
-    # Parse timestamps first so ordering is truly chronological.
     parsed_ts = pd.to_datetime(
         df[TRANSACTION_TIMESTAMP_COLUMN], errors="coerce", utc=True
     )
@@ -179,7 +174,6 @@ def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
         .drop(columns=["_parsed_ts"])
     )
 
-    # Normalize missing values for COPY NULL handling
     df = df.where(pd.notnull(df), None)
     return df
 
@@ -251,7 +245,6 @@ def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> N
         "[SILVER] Starting streaming silver build from %d files", len(parquet_files)
     )
 
-    # Recreate target and staging schemas
     _create_target_silver()
     _create_staging_bronze()
 
@@ -279,7 +272,6 @@ def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> N
 
         _truncate_bronze()
 
-    # Planner stats
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(f"ANALYZE {SILVER_TABLE};")
@@ -303,7 +295,6 @@ def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> N
             f"{est:,}" if est is not None else "unavailable",
         )
 
-    # Keep bronze table (empty) to preserve raw layer presence in DB architecture
     logger.info("[SILVER] Bronze staging table retained (empty) after load")
 
 

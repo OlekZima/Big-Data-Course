@@ -41,7 +41,6 @@ def create_gold_tables():
                 cur.execute(sql)
                 logger.info("[GOLD] Created %s", name)
 
-    # Final summary
     with get_connection() as conn:
         with conn.cursor() as cur:
             for table in [name for name, _ in queries]:

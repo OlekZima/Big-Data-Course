@@ -11,22 +11,18 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # PostgreSQL
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     postgres_db: str = Field(default="bigdata", alias="POSTGRES_DB")
     postgres_user: str = Field(default="user", alias="POSTGRES_USER")
     postgres_password: str = Field(default="pass", alias="POSTGRES_PASSWORD")
 
-    # DuckDB
     duckdb_path: str = Field(default=":memory:", alias="DUCKDB_PATH")
 
-    # Pipeline
     data_path: Path = Field(default=Path("data/raw"), alias="DATA_PATH")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_file: str = Field(default="logs/bgd.log", alias="LOG_FILE")
 
-    # Feature flags
     use_duckdb: bool = Field(default=False, alias="USE_DUCKDB")
     use_dbt: bool = Field(default=False, alias="USE_DBT")
 
