@@ -141,7 +141,7 @@ flowchart TD
     FW -->|Pushes file paths| Q
     ORCH -->|Manages| W
     Q -->|Consumes messages| W
-    W -->|Processes files\n(Bronze → Silver → Gold)| STORE
+    W -->|Processes files| STORE
 
     subgraph W[Workers]
         direction LR
