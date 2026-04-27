@@ -10,6 +10,8 @@ from src.config import settings
 def get_duckdb_connection() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     conn = duckdb.connect(settings.duckdb_path)
     try:
+        # Configure DuckDB to use multiple threads for parallel processing
+        conn.execute(f"SET threads = {settings.duckdb_threads};")
         yield conn
     finally:
         conn.close()

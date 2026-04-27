@@ -20,6 +20,7 @@ Result:
 from __future__ import annotations
 
 import io
+import concurrent.futures
 from pathlib import Path
 
 import pandas as pd
@@ -226,6 +227,28 @@ def _truncate_bronze() -> None:
             cur.execute(f"TRUNCATE TABLE {BRONZE_TABLE};")
 
 
+def _process_file(parquet_path: Path, use_duckdb: bool) -> pd.DataFrame:
+    """
+    Read and clean a single parquet file, returning a DataFrame.
+    This function is designed to be used in parallel processing.
+    """
+    from .utils.logger import get_logger
+    local_logger = get_logger(__name__)
+    local_logger.info("[SILVER] Processing %s", parquet_path.name)
+    try:
+        if use_duckdb:
+            df = _prepare_df_duckdb(parquet_path)
+        else:
+            df = pd.read_parquet(parquet_path)
+            df = _prepare_df(df)
+        local_logger.info("[SILVER] Processed %s (%d rows)", parquet_path.name, len(df))
+        return df
+    except Exception as e:
+        local_logger.exception("[SILVER] Failed to process %s: %s", parquet_path.name, e)
+        # Return empty DataFrame to avoid breaking the pipeline
+        return pd.DataFrame(columns=_COLS)
+
+
 def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> None:
     """
     Build silver by streaming parquet files through bronze staging.
@@ -257,20 +280,39 @@ def clean_silver(parquet_dir: str = "data/raw", full_profile: bool = False) -> N
     else:
         logger.info("[SILVER] pandas processing engine (set USE_DUCKDB=true to switch)")
 
-    for pf in tqdm(parquet_files, desc="Silver"):
-        if use_duckdb:
-            df = _prepare_df_duckdb(pf)
-        else:
-            df = pd.read_parquet(pf)
-            df = _prepare_df(df)
+    max_workers = min(settings.max_workers, len(parquet_files))
+    if max_workers <= 1:
+        # sequential fallback
+        for pf in tqdm(parquet_files, desc="Silver"):
+            if use_duckdb:
+                df = _prepare_df_duckdb(pf)
+            else:
+                df = pd.read_parquet(pf)
+                df = _prepare_df(df)
 
-        loaded = _copy_df_to_bronze(df)
-        total_loaded_to_bronze += loaded
+            loaded = _copy_df_to_bronze(df)
+            total_loaded_to_bronze += loaded
 
-        upserted = _upsert_silver_from_bronze()
-        total_upserted_silver += upserted
+            upserted = _upsert_silver_from_bronze()
+            total_upserted_silver += upserted
 
-        _truncate_bronze()
+            _truncate_bronze()
+    else:
+        logger.info("[SILVER] Parallel processing with %d workers", max_workers)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {
+                executor.submit(_process_file, pf, use_duckdb): pf
+                for pf in parquet_files
+            }
+            with tqdm(total=len(parquet_files), desc="Silver") as pbar:
+                for future in concurrent.futures.as_completed(future_to_file):
+                    df = future.result()
+                    loaded = _copy_df_to_bronze(df)
+                    total_loaded_to_bronze += loaded
+                    upserted = _upsert_silver_from_bronze()
+                    total_upserted_silver += upserted
+                    _truncate_bronze()
+                    pbar.update(1)
 
     with get_connection() as conn:
         with conn.cursor() as cur:
