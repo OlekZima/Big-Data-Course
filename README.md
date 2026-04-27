@@ -130,6 +130,38 @@ erDiagram
 
 ```mermaid
 flowchart TD
+    DS[("Kaggle Dataset\nParquet files")]
+    FW[File Watcher]
+    Q[(Redis Queue)]
+    ORCH[Orchestrator]
+    W[Workers]
+    STORE[(PostgreSQL)]
+
+    DS -->|New files detected| FW
+    FW -->|Pushes file paths| Q
+    ORCH -->|Manages| W
+    Q -->|Consumes messages| W
+    W -->|Processes files\n(Bronze → Silver → Gold)| STORE
+
+    subgraph W[Workers]
+        direction LR
+        W1[Worker 1]
+        W2[Worker 2]
+        WN[Worker N]
+    end
+```
+
+**Streaming Components:**
+- **File Watcher**: Monitors `data/raw/` for new Parquet files and pushes file paths to Redis queue
+- **Redis Queue**: Decouples file discovery from processing, enabling scalable ingestion
+- **Orchestrator**: Manages worker processes and handles graceful shutdown
+- **Workers**: Process queue items, performing the full medallion pipeline (Bronze -> Silver -> Gold) on each file
+- **Automatic Triggering**: Processing starts automatically when new files appear
+
+### Low-Level Architecture
+
+```mermaid
+flowchart TD
     DS[("Kaggle Dataset\nParquet files\ndata/raw/")]
 
     subgraph ENGINE["DuckDB Processing Engine (scripts/processing_engine.py)"]
@@ -173,6 +205,28 @@ flowchart TD
     DA_G -->|USE_DBT=true: dbt run| DBT_M
     DBT_M -->|CREATE TABLE| PG_G1 & PG_G2 & PG_G3 & PG_G4 & PG_G5 & PG_G6
 ```
+
+### Streaming Architecture Components
+
+The project now includes a Redis-based queue system for streaming data ingestion:
+
+- **Redis Queue**: Message queue for decoupling file discovery from processing
+- **File Watcher**: Monitors `data/raw/` directory for new Parquet files and pushes file paths to queue
+- **Workers**: Process queue items, performing silver layer transformations on each file
+- **Automatic Injection**: New files are automatically detected and queued for processing
+
+**Data Flow:**
+1. **File Detection**: File watcher monitors `data/raw/` for new `.parquet` files
+2. **Queue Injection**: File paths are pushed to Redis queue as JSON messages
+3. **Worker Processing**: Workers pop messages from queue, process files through bronze→silver pipeline
+4. **Automatic Triggering**: Processing starts automatically when files appear (Airflow/trigger-like behavior)
+
+**Streaming Modules:**
+- `streaming/config.py`: Configuration for Redis, queue settings, and file watching
+- `streaming/queue_manager.py`: Redis queue client with push/pop operations
+- `streaming/file_watcher.py`: File system watcher that detects new Parquet files
+- `streaming/worker.py`: Worker that processes queue items and loads data to silver
+- `streaming/orchestrator.py`: Orchestrator that starts all streaming components
 
 ### Data Flow (Silver Streaming)
 
