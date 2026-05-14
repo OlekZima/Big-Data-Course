@@ -1,0 +1,215 @@
+DATA PRODUCT CARD
+
+PJATK • Big Data Course • Two-Page Template
+
+
+
+Use this template to present your data product in a concise, market-ready format. Fill it manually or with AI support.
+
+
+
+1. PRODUCT OVERVIEW
+
+Product name: Transaction Analytics Data Product
+
+Owner / Team: BGD Team, PJATK Big Data Course
+
+Business domain: Financial Transactions / Banking
+
+Primary users: Data Analysts, Business Intelligence Teams, Financial Analysts, Data Scientists
+
+Version / update date: v1.0 / 2025-01-20
+
+
+
+
+AT A GLANCE
+
+Format: PostgreSQL Tables (Silver + Gold layers)
+
+Refresh: On-demand (manual pipeline trigger)
+
+Access: PostgreSQL Database (Docker container)
+
+Quality metrics: Completeness (>98%), Uniqueness (100%), Row Count Monitoring
+
+Status: Production-like
+
+
+
+2. PURPOSE & VALUE
+
+What problem does this data product solve? What decision, analysis, or use case does it support?
+
+This data product solves the challenge of working with raw, unclean financial transaction data by providing a curated, analytics-ready dataset. It eliminates the need for users to handle data quality issues like duplicates, missing keys, and inconsistent timestamps. The product supports daily transaction monitoring, channel performance analysis, counterparty risk assessment, and merchant category analysis. By providing pre-aggregated gold tables, it enables rapid insights without requiring users to write complex ETL logic or deal with data quality remediation.
+
+
+
+3. DATA SOURCES
+
+List the main source systems or files used to build this product.
+
+Source                          Type                    Refresh
+
+Kaggle Transaction Dataset      File (Parquet)          Static (initial load)
+
+                                398 parquet files
+
+                                abhyudayrbih/rbih-nfpc-phase-2
+
+
+
+4. HOW TO ACCESS THIS PRODUCT
+
+    Where is the product published? PostgreSQL Database (Docker container)
+
+    Direct link: https://github.com/username/BGD (Git Repository)
+
+    How to download or query it:
+        1. Start PostgreSQL: docker compose up -d
+        2. Run pipeline: uv run python -m src.main
+        3. Connect: psql -h localhost -p 5432 -U user -d bigdata
+        4. Query: SELECT * FROM silver LIMIT 10;
+
+    Credentials or access notes: Credentials stored in .env file (see .env.example)
+
+    Example file/table name: silver, gold_daily, gold_by_channel, gold_by_type, gold_top_counterparties, gold_by_mcc, gold_channel_share
+
+
+
+5. QUALITY SNAPSHOT
+
+Metric                          Value
+
+Completeness of transaction_id   > 98% (rows with valid transaction_id)
+
+Uniqueness of transaction_id     100% (enforced by upsert logic)
+
+Row count / freshness            Monitored per run / Updated on-demand
+
+Valid amount values              > 99% (non-null numeric amounts)
+
+
+
+These metrics ensure users can trust the data for analysis. The silver table is deduplicated, and all records have valid business keys.
+
+
+
+6. HIGH-LEVEL FLOW
+
+Summarize the pipeline in one line:
+
+Source                  Bronze                  Silver                  Gold                    Product
+
+Kaggle Parquet Files →  bronze (staging) →      silver (cleaned) →      gold_* (aggregations) → Data Marketplace
+
+
+
+Detailed Contract & Operating Information
+
+7. SCHEMA OVERVIEW
+
+List the main fields that a consumer needs to understand.
+
+Field name              Type            Description                                     Example
+
+transaction_id          text            Unique transaction identifier (PK)              txn_abc123xyz
+
+account_id              text            Account identifier of initiator                 acc_001
+
+transaction_timestamp   timestamptz     Date and time of transaction                    2024-01-15T14:30:00Z
+
+mcc_code                bigint          Merchant Category Code                          5812
+
+channel                 text            Transaction channel (mobile, web, ATM)          mobile
+
+amount                  double          Transaction amount                              150.50
+
+txn_type                text            Type of transaction (payment, transfer)         payment
+
+counterparty_id         text            Counterparty identifier                         cp_789
+
+
+
+
+
+8. REFRESH & OPERATIONS
+
+Refresh frequency: On-demand (manual trigger)
+
+Update trigger: Script execution / Airflow / Manual
+
+Storage location: PostgreSQL 15 (Docker container)
+
+Expected batch size / volume: Variable (depends on source files, ~millions of rows)
+
+Dependencies: Kaggle dataset, Docker, Python 3.10+, uv package manager
+
+
+
+9. EXAMPLE USAGE
+
+Business question:
+
+What are the daily transaction trends over the past week?
+
+Example query / code / steps:
+
+SELECT
+    day,
+    txn_count,
+    total_amount,
+    avg_amount
+FROM gold_daily
+ORDER BY day DESC
+LIMIT 7;
+
+
+
+Or using Python:
+
+import pandas as pd
+import psycopg2
+
+conn = psycopg2.connect(
+    host="localhost", port=5432,
+    database="bigdata", user="user", password="pass"
+)
+df = pd.read_sql("SELECT * FROM gold_by_channel", conn)
+print(df)
+
+
+
+10. LIMITATIONS & RISKS
+
+    - Data is static (no real-time updates from source systems)
+
+    - Source data quality depends on Kaggle dataset accuracy
+
+    - Timestamp parsing may fail for non-standard formats
+
+    - Counterparty and MCC data may have gaps or null values
+
+    - No historical versioning - tables are rebuilt on each pipeline run
+
+    - UNLOGGED tables (Bronze, Silver) - data lost on PostgreSQL restart
+
+    - Gold tables limited to top 20 counterparties and MCC codes
+
+
+
+11. GOVERNANCE & CONTACT
+
+Owner: BGD Team
+
+Contact: bgd-team@pjatk.edu.pl
+
+Steward / responsible person: Data Engineering Team
+
+Access policy: Public for class / Restricted in production
+
+Marketplace location: MS Teams / Data Marketplace folder
+
+
+
+END OF TEMPLATE

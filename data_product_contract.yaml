@@ -1,0 +1,315 @@
+# Data Product Specification / Data Product Contract
+# Transaction Analytics Data Product
+# BGD - Medallion ELT Pipeline
+
+---
+product:
+  name: "Transaction Analytics Data Product"
+  version: "1.0.0"
+  owner: "BGD Team"
+  contact: "bgd-team@pjatk.edu.pl"
+  steward: "Data Engineering Team"
+  status: "Production-like"
+  created_at: "2025-01-20"
+  updated_at: "2025-01-20"
+
+purpose:
+  description: |
+    This data product provides cleaned, deduplicated, and aggregated transactional
+    data for financial analytics. It enables users to analyze transaction patterns,
+    channel performance, counterparty behavior, and daily trends without dealing
+    with raw data quality issues.
+  business_value: |
+    - Supports financial transaction analysis and reporting
+    - Enables channel performance monitoring
+    - Provides daily transaction trend analysis
+    - Identifies top counterparties and merchant categories
+    - Reduces time-to-insight by providing pre-cleaned data
+  primary_users:
+    - Data Analysts
+    - Business Intelligence Teams
+    - Financial Analysts
+    - Data Scientists
+  use_cases:
+    - Daily transaction volume monitoring
+    - Channel performance analysis
+    - Counterparty risk assessment
+    - Merchant category analysis
+    - Transaction pattern discovery
+
+data_sources:
+  - name: "Kaggle Transaction Dataset"
+    type: "File (Parquet)"
+    description: "Raw transactional data in parquet format"
+    refresh: "Static (initial load)"
+    location: "data/raw/*.parquet"
+    handle: "abhyudayrbih/rbih-nfpc-phase-2"
+
+schema:
+  silver_table:
+    name: "silver"
+    description: "Cleaned and deduplicated transaction records"
+    columns:
+      - name: "transaction_id"
+        type: "text"
+        description: "Unique transaction identifier"
+        nullable: false
+        primary_key: true
+        example: "txn_abc123xyz"
+      - name: "account_id"
+        type: "text"
+        description: "Account identifier of the transaction initiator"
+        nullable: true
+        example: "acc_001"
+      - name: "transaction_timestamp"
+        type: "timestamptz"
+        description: "Date and time when the transaction occurred"
+        nullable: true
+        example: "2024-01-15T14:30:00Z"
+      - name: "mcc_code"
+        type: "bigint"
+        description: "Merchant Category Code (MCC) for the transaction"
+        nullable: true
+        example: "5812"
+      - name: "channel"
+        type: "text"
+        description: "Transaction channel (e.g., mobile, web, ATM)"
+        nullable: true
+        example: "mobile"
+      - name: "amount"
+        type: "double"
+        description: "Transaction amount in the account currency"
+        nullable: true
+        example: "150.50"
+      - name: "txn_type"
+        type: "text"
+        description: "Type of transaction (e.g., payment, transfer, withdrawal)"
+        nullable: true
+        example: "payment"
+      - name: "counterparty_id"
+        type: "text"
+        description: "Identifier of the transaction counterparty"
+        nullable: true
+        example: "cp_789"
+
+  gold_tables:
+    - name: "gold_daily"
+      description: "Daily transaction aggregations"
+      columns:
+        - name: "day"
+          type: "date"
+          description: "Calendar date"
+        - name: "txn_count"
+          type: "bigint"
+          description: "Number of transactions on that day"
+        - name: "unique_accounts"
+          type: "bigint"
+          description: "Number of distinct accounts active"
+        - name: "total_amount"
+          type: "double"
+          description: "Sum of all transaction amounts"
+        - name: "avg_amount"
+          type: "double"
+          description: "Average transaction amount"
+        - name: "min_amount"
+          type: "double"
+          description: "Minimum transaction amount"
+        - name: "max_amount"
+          type: "double"
+          description: "Maximum transaction amount"
+
+    - name: "gold_by_channel"
+      description: "Aggregations by transaction channel"
+      columns:
+        - name: "channel"
+          type: "text"
+          description: "Transaction channel name"
+        - name: "txn_count"
+          type: "bigint"
+          description: "Number of transactions via this channel"
+        - name: "total_amount"
+          type: "double"
+          description: "Total amount via this channel"
+        - name: "avg_amount"
+          type: "double"
+          description: "Average transaction amount"
+
+    - name: "gold_by_type"
+      description: "Aggregations by transaction type"
+      columns:
+        - name: "txn_type"
+          type: "text"
+          description: "Transaction type"
+        - name: "txn_count"
+          type: "bigint"
+          description: "Number of transactions of this type"
+        - name: "total_amount"
+          type: "double"
+          description: "Total amount for this type"
+        - name: "avg_amount"
+          type: "double"
+          description: "Average transaction amount"
+
+    - name: "gold_top_counterparties"
+      description: "Top 20 counterparties by transaction volume"
+      columns:
+        - name: "counterparty_id"
+          type: "text"
+          description: "Counterparty identifier"
+        - name: "txn_count"
+          type: "bigint"
+          description: "Number of transactions with this counterparty"
+        - name: "total_volume"
+          type: "double"
+          description: "Total transaction volume"
+
+    - name: "gold_by_mcc"
+      description: "Top 20 MCC codes by transaction amount"
+      columns:
+        - name: "mcc_code"
+          type: "bigint"
+          description: "Merchant Category Code"
+        - name: "txn_count"
+          type: "bigint"
+          description: "Number of transactions in this category"
+        - name: "total_amount"
+          type: "double"
+          description: "Total transaction amount"
+
+    - name: "gold_channel_share"
+      description: "Channel share of total transactions and amounts"
+      columns:
+        - name: "channel"
+          type: "text"
+          description: "Transaction channel"
+        - name: "txn_count"
+          type: "bigint"
+          description: "Number of transactions"
+        - name: "total_amount"
+          type: "double"
+          description: "Total amount"
+        - name: "txn_share"
+          type: "numeric"
+          description: "Share of total transactions (0-1)"
+        - name: "amount_share"
+          type: "double"
+          description: "Share of total amount (0-1)"
+
+refresh:
+  frequency: "On-demand (manual trigger)"
+  trigger: "Manual / Airflow / Script execution"
+  expected_latency: "Minutes (depends on data volume)"
+  batch_size: "Variable (depends on source files)"
+
+access:
+  method: "PostgreSQL Database"
+  location: "Local Docker container (localhost:5432)"
+  database: "bigdata"
+  schema: "public"
+  credentials_required: true
+  credential_source: "Environment variables (.env file)"
+  access_policy: "Public for class / Restricted in production"
+  connection_string_template: "postgresql://{user}:{password}@{host}:{port}/{database}"
+
+quality_metrics:
+  - name: "Completeness of transaction_id"
+    definition: "Percentage of rows where transaction_id is not null and not empty"
+    current_value: "TBD (calculated on pipeline run)"
+    threshold: "> 98%"
+    update_cadence: "Every pipeline run"
+
+  - name: "Uniqueness of transaction_id"
+    definition: "Percentage of unique transaction_id values in silver table (should be 100% after deduplication)"
+    current_value: "100% (enforced by upsert logic)"
+    threshold: "100%"
+    update_cadence: "Every pipeline run"
+
+  - name: "Row count consistency"
+    definition: "Number of records in silver table after each pipeline run, monitored for anomalies"
+    current_value: "TBD (calculated on pipeline run)"
+    threshold: "±10% from previous run (anomaly detection)"
+    update_cadence: "Every pipeline run"
+
+  - name: "Data freshness"
+    definition: "Time elapsed since last successful pipeline update"
+    current_value: "TBD"
+    threshold: "< 48 hours"
+    update_cadence: "Daily check"
+
+  - name: "Valid amount values"
+    definition: "Percentage of transactions where amount is not null and is a valid numeric value"
+    current_value: "TBD (calculated on pipeline run)"
+    threshold: "> 99%"
+    update_cadence: "Every pipeline run"
+
+limitations:
+  - "Data is static (no real-time updates)"
+  - "Source data quality depends on Kaggle dataset"
+  - "Timestamp parsing may fail for non-standard formats"
+  - "Counterparty and MCC data may have gaps"
+  - "No historical versioning - table is rebuilt on each run"
+  - "UNLOGGED tables - data lost on PostgreSQL restart"
+  - "Limited to top 20 counterparties and MCC codes in gold tables"
+
+risks:
+  - name: "Duplicate transactions"
+    mitigation: "Upsert logic in Silver layer keeps only latest record per transaction_id"
+  - name: "Missing business keys"
+    mitigation: "Rows with null/empty transaction_id are filtered out before Silver"
+  - name: "Timestamp inconsistencies"
+    mitigation: "Timestamp normalization and parsing with error handling"
+
+example_usage:
+  sql:
+    description: "Query daily transaction trends"
+    query: |
+      SELECT
+        day,
+        txn_count,
+        total_amount,
+        avg_amount
+      FROM gold_daily
+      ORDER BY day DESC
+      LIMIT 10;
+
+  python:
+    description: "Load data using pandas and DuckDB"
+    code: |
+      import pandas as pd
+      import duckdb
+
+      # Connect to PostgreSQL
+      conn = duckdb.connect()
+
+      # Query silver table
+      df = conn.execute("""
+        SELECT * FROM read_postgres(
+          'postgresql://user:pass@localhost:5432/bigdata',
+          'public',
+          'silver'
+        )
+        LIMIT 100
+      """).df()
+
+      print(df.head())
+
+  dbt:
+    description: "Run dbt transformations"
+    command: "cd dbt && dbt run"
+
+governance:
+  owner: "BGD Team"
+  contact: "bgd-team@pjatk.edu.pl"
+  steward: "Data Engineering Team"
+  access_policy: "Public for class / Restricted in production"
+  marketplace_location: "MS Teams / Data Marketplace folder"
+  documentation: "https://github.com/username/BGD/blob/main/README.md"
+  sla: "Best effort - no production SLA for class project"
+
+technical_details:
+  processing_engine: "DuckDB (optional) / pandas"
+  orchestration: "Dagster"
+  transformation: "SQL / dbt (optional)"
+  storage: "PostgreSQL 15 (Docker)"
+  table_type: "UNLOGGED (Bronze, Silver) / Regular (Gold)"
+  parallel_processing: "Supported (configurable workers)"
