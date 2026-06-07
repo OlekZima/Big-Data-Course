@@ -23,6 +23,10 @@ dependencies = [
     "rq>=1.0.0",
     "rq-scheduler>=0.11.0",
     "watchdog>=3.0.0",
+    "matplotlib>=3.10.9",
+    "seaborn>=0.13.2",
+    "requests>=2.32.5",
+    "numpy>=2.2.6",
 ]
 
 [tool.dagster]
